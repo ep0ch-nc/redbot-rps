@@ -1,6 +1,6 @@
 # redbot-rps
 
-Rock Paper Scissors cog for [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot).
+Challenge-based Rock Paper Scissors cog for [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot).
 
 ## Install
 
@@ -11,10 +11,21 @@ Rock Paper Scissors cog for [Red-DiscordBot](https://github.com/Cog-Creators/Red
 [p]load rps
 ```
 
-## Usage
+## Flow
 
-- `[p]rps` — interactive buttons
-- `[p]rps <rock|paper|scissors>` — quick play
-- `[p]rps bo <N>` — best-of-N (odd, 3-9)
-- `[p]rpsstats` — win/loss/tie record
-- `[p]rpsreset` — wipe your stats
+1. Challenger: `[p]rps challenge @user` (or `[p]rps challenge bot` for solo testing vs fake CPU)
+2. Opponent: `[p]rps accept` (auto for bot)
+3. Both DM the bot: `[p]rps pick <r|p|s>`
+4. Once both picked, result posts in the original channel.
+
+## Commands
+
+- `[p]rps challenge <@user|bot>` — start challenge
+- `[p]rps accept` / `[p]rps decline` — respond to challenge
+- `[p]rps cancel` — challenger cancels
+- `[p]rps pick <rock|paper|scissors>` — DM only, submit pick
+- `[p]rps status` — current channel game state
+- `[p]rpsstats [@user]` — W/L/T record
+- `[p]rpsreset` — wipe own stats
+
+Aliases: `r`, `p`, `s`. Opponent keywords for CPU: `bot`, `cpu`, `ai`. Games auto-expire after 5 minutes.

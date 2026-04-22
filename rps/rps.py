@@ -1,175 +1,333 @@
+import asyncio
 import random
-from typing import Optional
+import time
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 import discord
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 
 CHOICES = ("rock", "paper", "scissors")
+ALIASES = {
+    "r": "rock", "p": "paper", "s": "scissors",
+    "rock": "rock", "paper": "paper", "scissors": "scissors",
+}
 EMOJI = {"rock": "\U0001FAA8", "paper": "\U0001F4C4", "scissors": "✂️"}
 BEATS = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
+BOT_ID = 0
+BOT_NAME = "Bot (CPU)"
+BOT_KEYWORDS = {"bot", "cpu", "ai", "computer"}
+GAME_TIMEOUT = 300
 
 
-def decide(player: str, bot_choice: str) -> str:
-    if player == bot_choice:
+def decide(a: str, b: str) -> str:
+    if a == b:
         return "tie"
-    return "win" if BEATS[player] == bot_choice else "loss"
+    return "a" if BEATS[a] == b else "b"
 
 
-class RPSView(discord.ui.View):
-    def __init__(self, cog: "RPS", author: discord.abc.User, rounds: int = 1):
-        super().__init__(timeout=60)
-        self.cog = cog
-        self.author = author
-        self.rounds = rounds
-        self.player_score = 0
-        self.bot_score = 0
-        self.ties = 0
-        self.round_num = 1
-        self.message: Optional[discord.Message] = None
+@dataclass
+class Game:
+    channel_id: int
+    challenger_id: int
+    opponent_id: int
+    state: str = "pending"
+    picks: Dict[int, str] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    challenger_name: str = ""
+    opponent_name: str = ""
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author.id:
-            await interaction.response.send_message(
-                "This is not your game.", ephemeral=True
-            )
-            return False
-        return True
+    @property
+    def vs_bot(self) -> bool:
+        return self.opponent_id == BOT_ID
 
-    async def on_timeout(self) -> None:
-        for child in self.children:
-            child.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(content="Timed out.", view=self)
-            except discord.HTTPException:
-                pass
-
-    def header(self) -> str:
-        if self.rounds == 1:
-            return f"**Rock Paper Scissors** — {self.author.display_name}"
-        return (
-            f"**Rock Paper Scissors (Best of {self.rounds})** — "
-            f"{self.author.display_name}\nRound {self.round_num} | "
-            f"You {self.player_score} - {self.bot_score} Bot (ties {self.ties})"
-        )
-
-    async def play(self, interaction: discord.Interaction, pick: str) -> None:
-        bot_choice = random.choice(CHOICES)
-        outcome = decide(pick, bot_choice)
-        if outcome == "win":
-            self.player_score += 1
-        elif outcome == "loss":
-            self.bot_score += 1
-        else:
-            self.ties += 1
-
-        await self.cog.record(interaction.user, outcome)
-
-        needed = self.rounds // 2 + 1
-        finished = (
-            self.rounds == 1
-            or self.player_score >= needed
-            or self.bot_score >= needed
-        )
-
-        round_line = (
-            f"{EMOJI[pick]} You: **{pick}**\n"
-            f"{EMOJI[bot_choice]} Bot: **{bot_choice}**\n"
-            f"→ **{outcome.upper()}**"
-        )
-
-        if finished:
-            if self.rounds == 1:
-                summary = round_line
-            else:
-                if self.player_score > self.bot_score:
-                    final = f"{self.author.display_name} wins the match!"
-                elif self.bot_score > self.player_score:
-                    final = "Bot wins the match!"
-                else:
-                    final = "Match tied."
-                summary = (
-                    f"{round_line}\n\n**Final:** You {self.player_score} - "
-                    f"{self.bot_score} Bot (ties {self.ties}) — {final}"
-                )
-            for child in self.children:
-                child.disabled = True
-            self.stop()
-            await interaction.response.edit_message(
-                content=f"{self.header()}\n\n{summary}", view=self
-            )
-            return
-
-        self.round_num += 1
-        await interaction.response.edit_message(
-            content=f"{self.header()}\n\n{round_line}", view=self
-        )
-
-    @discord.ui.button(label="Rock", emoji="\U0001FAA8", style=discord.ButtonStyle.secondary)
-    async def rock(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.play(interaction, "rock")
-
-    @discord.ui.button(label="Paper", emoji="\U0001F4C4", style=discord.ButtonStyle.secondary)
-    async def paper(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.play(interaction, "paper")
-
-    @discord.ui.button(label="Scissors", emoji="✂️", style=discord.ButtonStyle.secondary)
-    async def scissors(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await self.play(interaction, "scissors")
+    def both_picked(self) -> bool:
+        if self.vs_bot:
+            return self.challenger_id in self.picks
+        return self.challenger_id in self.picks and self.opponent_id in self.picks
 
 
 class RPS(commands.Cog):
-    """Rock Paper Scissors against the bot."""
+    """Challenge-based Rock Paper Scissors."""
 
     def __init__(self, bot: Red):
         self.bot = bot
         self.config = Config.get_conf(
-            self, identifier=0x52505301, force_registration=True
+            self, identifier=0x52505302, force_registration=True
         )
         self.config.register_user(wins=0, losses=0, ties=0)
+        self.games: Dict[int, Game] = {}
+        self.player_channel: Dict[int, int] = {}
+        self._timeout_tasks: Dict[int, asyncio.Task] = {}
 
-    async def record(self, user: discord.abc.User, outcome: str) -> None:
+    def cog_unload(self) -> None:
+        for task in self._timeout_tasks.values():
+            task.cancel()
+
+    def _remove_game(self, game: Game) -> None:
+        self.games.pop(game.channel_id, None)
+        self.player_channel.pop(game.challenger_id, None)
+        if not game.vs_bot:
+            self.player_channel.pop(game.opponent_id, None)
+        task = self._timeout_tasks.pop(game.channel_id, None)
+        if task:
+            task.cancel()
+
+    def _get_game_for_user(self, user_id: int) -> Optional[Game]:
+        channel_id = self.player_channel.get(user_id)
+        if channel_id is None:
+            return None
+        return self.games.get(channel_id)
+
+    async def _record(self, user_id: int, outcome: str) -> None:
+        if user_id == BOT_ID:
+            return
         key = {"win": "wins", "loss": "losses", "tie": "ties"}[outcome]
-        async with self.config.user(user).all() as data:
+        async with self.config.user_from_id(user_id).all() as data:
             data[key] = data.get(key, 0) + 1
 
+    async def _timeout_watcher(self, game: Game) -> None:
+        try:
+            await asyncio.sleep(GAME_TIMEOUT)
+        except asyncio.CancelledError:
+            return
+        if self.games.get(game.channel_id) is not game or game.state == "done":
+            return
+        self._remove_game(game)
+        channel = self.bot.get_channel(game.channel_id)
+        if channel:
+            try:
+                await channel.send("RPS game timed out.")
+            except discord.HTTPException:
+                pass
+
+    def _start_timer(self, game: Game) -> None:
+        task = asyncio.create_task(self._timeout_watcher(game))
+        self._timeout_tasks[game.channel_id] = task
+
     @commands.group(name="rps", invoke_without_command=True)
-    async def rps(self, ctx: commands.Context, choice: Optional[str] = None):
-        """Play rock paper scissors. No args = buttons. rock/paper/scissors for quick play."""
-        if choice is None:
-            view = RPSView(self, ctx.author, rounds=1)
-            view.message = await ctx.send(
-                f"{view.header()}\n\nPick one:", view=view
-            )
-            return
+    async def rps(self, ctx: commands.Context):
+        """RPS challenge. Subcommands: challenge, accept, decline, cancel, pick, status."""
+        await ctx.send_help()
 
-        pick = choice.lower()
-        aliases = {"r": "rock", "p": "paper", "s": "scissors"}
-        pick = aliases.get(pick, pick)
-        if pick not in CHOICES:
+    @rps.command(name="challenge", aliases=["c"])
+    @commands.guild_only()
+    async def rps_challenge(self, ctx: commands.Context, *, opponent: str):
+        """Challenge a user or the bot. Usage: [p]rps challenge @user | bot"""
+        if ctx.channel.id in self.games:
             await ctx.send(
-                f"Invalid choice `{choice}`. Use rock, paper, or scissors."
+                "A game is already active in this channel. "
+                f"Use `{ctx.clean_prefix}rps cancel` or wait."
             )
             return
+        if ctx.author.id in self.player_channel:
+            await ctx.send("You already have an active game elsewhere.")
+            return
 
-        bot_choice = random.choice(CHOICES)
-        outcome = decide(pick, bot_choice)
-        await self.record(ctx.author, outcome)
+        target = opponent.strip()
+        vs_bot = target.lower() in BOT_KEYWORDS
+        opp_id = BOT_ID
+        opp_name = BOT_NAME
+
+        if not vs_bot:
+            try:
+                member = await commands.MemberConverter().convert(ctx, target)
+            except commands.BadArgument:
+                await ctx.send(
+                    "Invalid opponent. Mention a user or type `bot` for CPU."
+                )
+                return
+            if member.bot:
+                await ctx.send(
+                    "Can't challenge real bots. Use `bot` keyword for the fake CPU opponent."
+                )
+                return
+            if member.id == ctx.author.id:
+                await ctx.send(
+                    "Can't challenge yourself. Use `bot` for solo play."
+                )
+                return
+            if member.id in self.player_channel:
+                await ctx.send(f"{member.display_name} is already in a game.")
+                return
+            opp_id = member.id
+            opp_name = member.display_name
+
+        game = Game(
+            channel_id=ctx.channel.id,
+            challenger_id=ctx.author.id,
+            opponent_id=opp_id,
+            state="picking" if vs_bot else "pending",
+            challenger_name=ctx.author.display_name,
+            opponent_name=opp_name,
+        )
+        self.games[ctx.channel.id] = game
+        self.player_channel[ctx.author.id] = ctx.channel.id
+        if not vs_bot:
+            self.player_channel[opp_id] = ctx.channel.id
+
+        if vs_bot:
+            game.picks[BOT_ID] = random.choice(CHOICES)
+            await ctx.send(
+                f"**RPS:** {ctx.author.mention} vs **{BOT_NAME}**\n"
+                f"The CPU locked its pick. DM me "
+                f"`{ctx.clean_prefix}rps pick <rock|paper|scissors>` to play."
+            )
+        else:
+            await ctx.send(
+                f"**RPS Challenge:** {ctx.author.mention} challenges <@{opp_id}>.\n"
+                f"<@{opp_id}> respond with `{ctx.clean_prefix}rps accept` "
+                f"or `{ctx.clean_prefix}rps decline` within 5 minutes."
+            )
+        self._start_timer(game)
+
+    @rps.command(name="accept")
+    @commands.guild_only()
+    async def rps_accept(self, ctx: commands.Context):
+        """Accept a pending challenge targeting you in this channel."""
+        game = self.games.get(ctx.channel.id)
+        if (
+            not game
+            or game.state != "pending"
+            or game.opponent_id != ctx.author.id
+        ):
+            await ctx.send("No challenge for you to accept here.")
+            return
+        game.state = "picking"
         await ctx.send(
-            f"{EMOJI[pick]} You: **{pick}**\n"
-            f"{EMOJI[bot_choice]} Bot: **{bot_choice}**\n"
-            f"→ **{outcome.upper()}**"
+            f"Challenge accepted. Both players DM me "
+            f"`{ctx.clean_prefix}rps pick <rock|paper|scissors>`."
         )
 
-    @rps.command(name="bo")
-    async def rps_bo(self, ctx: commands.Context, rounds: int):
-        """Best-of-N match with buttons. N must be odd, 3-9."""
-        if rounds < 3 or rounds > 9 or rounds % 2 == 0:
-            await ctx.send("N must be odd and between 3 and 9.")
+    @rps.command(name="decline")
+    @commands.guild_only()
+    async def rps_decline(self, ctx: commands.Context):
+        """Decline a pending challenge targeting you."""
+        game = self.games.get(ctx.channel.id)
+        if (
+            not game
+            or game.state != "pending"
+            or game.opponent_id != ctx.author.id
+        ):
+            await ctx.send("No challenge for you to decline here.")
             return
-        view = RPSView(self, ctx.author, rounds=rounds)
-        view.message = await ctx.send(f"{view.header()}\n\nPick one:", view=view)
+        self._remove_game(game)
+        await ctx.send(f"{ctx.author.display_name} declined the challenge.")
+
+    @rps.command(name="cancel")
+    async def rps_cancel(self, ctx: commands.Context):
+        """Challenger cancels the current channel game."""
+        game = self._get_game_for_user(ctx.author.id)
+        if not game or game.challenger_id != ctx.author.id:
+            await ctx.send("You have no game to cancel.")
+            return
+        channel = self.bot.get_channel(game.channel_id)
+        self._remove_game(game)
+        msg = "Game canceled."
+        if channel and (not ctx.guild or channel.id != ctx.channel.id):
+            try:
+                await channel.send(msg)
+            except discord.HTTPException:
+                pass
+        await ctx.send(msg)
+
+    @rps.command(name="pick", aliases=["play"])
+    async def rps_pick(self, ctx: commands.Context, choice: str):
+        """DM only: submit your pick."""
+        if ctx.guild is not None:
+            try:
+                await ctx.message.delete()
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                pass
+            try:
+                await ctx.author.send(
+                    "Pick via DM so your opponent can't see. "
+                    f"Send `{ctx.clean_prefix}rps pick <r|p|s>` to me here."
+                )
+            except discord.Forbidden:
+                await ctx.send(
+                    f"{ctx.author.mention} enable DMs from server members and try again."
+                )
+            return
+
+        game = self._get_game_for_user(ctx.author.id)
+        if not game:
+            await ctx.send("You have no active RPS game.")
+            return
+        if game.state != "picking":
+            await ctx.send("Game is not in picking state yet.")
+            return
+        pick = ALIASES.get(choice.lower())
+        if pick is None:
+            await ctx.send("Invalid. Use rock, paper, scissors (or r/p/s).")
+            return
+        if ctx.author.id in game.picks:
+            await ctx.send("You already picked. Wait for opponent.")
+            return
+        game.picks[ctx.author.id] = pick
+        await ctx.send(f"Locked in: **{pick}** {EMOJI[pick]}")
+
+        if game.both_picked():
+            await self._reveal(game)
+
+    async def _reveal(self, game: Game) -> None:
+        game.state = "done"
+        channel = self.bot.get_channel(game.channel_id)
+        if channel is None:
+            self._remove_game(game)
+            return
+
+        a_id, b_id = game.challenger_id, game.opponent_id
+        a_pick, b_pick = game.picks[a_id], game.picks[b_id]
+        a_name, b_name = game.challenger_name, game.opponent_name
+
+        winner = decide(a_pick, b_pick)
+        if winner == "tie":
+            result = "**Tie!**"
+            await self._record(a_id, "tie")
+            if not game.vs_bot:
+                await self._record(b_id, "tie")
+        elif winner == "a":
+            result = f"**{a_name} wins!**"
+            await self._record(a_id, "win")
+            if not game.vs_bot:
+                await self._record(b_id, "loss")
+        else:
+            result = f"**{b_name} wins!**"
+            await self._record(a_id, "loss")
+            if not game.vs_bot:
+                await self._record(b_id, "win")
+
+        try:
+            await channel.send(
+                f"**RPS Reveal:**\n"
+                f"{EMOJI[a_pick]} {a_name}: **{a_pick}**\n"
+                f"{EMOJI[b_pick]} {b_name}: **{b_pick}**\n"
+                f"{result}"
+            )
+        except discord.HTTPException:
+            pass
+        self._remove_game(game)
+
+    @rps.command(name="status")
+    async def rps_status(self, ctx: commands.Context):
+        """Show current game state in this channel (or your DM game)."""
+        game = self.games.get(ctx.channel.id) if ctx.guild else self._get_game_for_user(ctx.author.id)
+        if not game:
+            await ctx.send("No active game.")
+            return
+        picked = []
+        if game.challenger_id in game.picks:
+            picked.append(game.challenger_name)
+        if game.opponent_id in game.picks:
+            picked.append(game.opponent_name)
+        elapsed = int(time.time() - game.created_at)
+        await ctx.send(
+            f"State: **{game.state}** | {game.challenger_name} vs {game.opponent_name}\n"
+            f"Picked: {', '.join(picked) if picked else 'nobody'} | "
+            f"elapsed {elapsed}s / {GAME_TIMEOUT}s"
+        )
 
     @commands.command(name="rpsstats")
     async def rps_stats(
