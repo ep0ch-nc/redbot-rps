@@ -1,0 +1,7 @@
+{
+    "author": ["ep0ch-nc"],
+    "install_msg": "Thanks for adding the redbot-rps repo. Install with `[p]cog install redbot-rps rps`.",
+    "name": "redbot-rps",
+    "short": "Rock Paper Scissors cog repo.",
+    "description": "Repository hosting the RPS cog for Red-DiscordBot."
+}

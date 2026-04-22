@@ -1,0 +1,11 @@
+{
+    "author": ["ep0ch-nc"],
+    "name": "RPS",
+    "short": "Rock Paper Scissors game.",
+    "description": "Play rock paper scissors against the bot with buttons, quick text, or best-of-N mode. Tracks per-user stats.",
+    "install_msg": "Loaded. Try `[p]rps` for buttons or `[p]rps rock` for quick play.",
+    "tags": ["game", "fun", "rps"],
+    "end_user_data_statement": "This cog stores per-user RPS win/loss/tie counts keyed by Discord user ID. Data removed on `[p]rpsreset` or via Red's data deletion requests.",
+    "min_bot_version": "3.5.0",
+    "requirements": []
+}
