@@ -1,6 +1,6 @@
 # redbot-rps
 
-Challenge-based Rock Paper Scissors cog for [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot).
+Slash-command RPS with challenges + fake CPU opponent for [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot).
 
 ## Install
 
@@ -11,21 +11,35 @@ Challenge-based Rock Paper Scissors cog for [Red-DiscordBot](https://github.com/
 [p]load rps
 ```
 
+## Enable slash commands
+
+Red requires the owner to enable and sync slash commands:
+
+```
+[p]slash enable rps
+[p]slash enable rpsstats
+[p]slash enable rpsreset
+[p]slash sync
+```
+
+Global sync can take up to an hour. For instant testing, run `[p]slash sync` which syncs globally; or use `[p]slash sync <guild_id>` if Red exposes it.
+
 ## Flow
 
-1. Challenger: `[p]rps challenge @user` (or `[p]rps challenge bot` for solo testing vs fake CPU)
-2. Opponent: `[p]rps accept` (auto for bot)
-3. Both DM the bot: `[p]rps pick <r|p|s>`
-4. Once both picked, result posts in the original channel.
+- Challenger runs `/rps challenge user:@someone` or `/rps solo` for fake CPU
+- Opponent responds with `/rps accept` or `/rps decline`
+- Both submit `/rps pick choice:rock|paper|scissors` (ephemeral, private)
+- Reveal posts publicly in the channel
 
 ## Commands
 
-- `[p]rps challenge <@user|bot>` — start challenge
-- `[p]rps accept` / `[p]rps decline` — respond to challenge
-- `[p]rps cancel` — challenger cancels
-- `[p]rps pick <rock|paper|scissors>` — DM only, submit pick
-- `[p]rps status` — current channel game state
-- `[p]rpsstats [@user]` — W/L/T record
-- `[p]rpsreset` — wipe own stats
+- `/rps challenge user:@mention` — challenge a user
+- `/rps solo` — challenge the fake CPU instantly
+- `/rps accept` / `/rps decline` — answer challenge
+- `/rps cancel` — abort own game
+- `/rps pick choice:<rock|paper|scissors>` — ephemeral pick
+- `/rps status` — current state
+- `/rpsstats [user]` — W/L/T record
+- `/rpsreset` — wipe own stats
 
-Aliases: `r`, `p`, `s`. Opponent keywords for CPU: `bot`, `cpu`, `ai`. Games auto-expire after 5 minutes.
+All commands also work with prefix (`[p]rps challenge @x`). Games auto-expire after 5 minutes.

@@ -2,22 +2,19 @@ import asyncio
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 import discord
+from discord import app_commands
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 
 CHOICES = ("rock", "paper", "scissors")
-ALIASES = {
-    "r": "rock", "p": "paper", "s": "scissors",
-    "rock": "rock", "paper": "paper", "scissors": "scissors",
-}
+PickChoice = Literal["rock", "paper", "scissors"]
 EMOJI = {"rock": "\U0001FAA8", "paper": "\U0001F4C4", "scissors": "✂️"}
 BEATS = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
 BOT_ID = 0
-BOT_NAME = "Bot (CPU)"
-BOT_KEYWORDS = {"bot", "cpu", "ai", "computer"}
+BOT_NAME = "CPU"
 GAME_TIMEOUT = 300
 
 
@@ -49,12 +46,12 @@ class Game:
 
 
 class RPS(commands.Cog):
-    """Challenge-based Rock Paper Scissors."""
+    """Slash-based Rock Paper Scissors with challenges."""
 
     def __init__(self, bot: Red):
         self.bot = bot
         self.config = Config.get_conf(
-            self, identifier=0x52505302, force_registration=True
+            self, identifier=0x52505303, force_registration=True
         )
         self.config.register_user(wins=0, losses=0, ties=0)
         self.games: Dict[int, Game] = {}
@@ -106,53 +103,60 @@ class RPS(commands.Cog):
         task = asyncio.create_task(self._timeout_watcher(game))
         self._timeout_tasks[game.channel_id] = task
 
-    @commands.group(name="rps", invoke_without_command=True)
+    @commands.hybrid_group(name="rps", invoke_without_command=True)
     async def rps(self, ctx: commands.Context):
-        """RPS challenge. Subcommands: challenge, accept, decline, cancel, pick, status."""
+        """Rock Paper Scissors. Subcommands: challenge, solo, accept, decline, cancel, pick, status."""
         await ctx.send_help()
 
-    @rps.command(name="challenge", aliases=["c"])
+    @rps.command(name="challenge")
+    @app_commands.describe(user="The user you want to challenge.")
     @commands.guild_only()
-    async def rps_challenge(self, ctx: commands.Context, *, opponent: str):
-        """Challenge a user or the bot. Usage: [p]rps challenge @user | bot"""
+    async def rps_challenge(self, ctx: commands.Context, user: discord.Member):
+        """Challenge another user to RPS."""
+        if user.bot:
+            await ctx.send(
+                "Can't challenge real bots. Use `/rps solo` to play the fake CPU.",
+                ephemeral=True,
+            )
+            return
+        if user.id == ctx.author.id:
+            await ctx.send(
+                "Can't challenge yourself. Use `/rps solo` for solo play.",
+                ephemeral=True,
+            )
+            return
+        await self._start_game(ctx, user)
+
+    @rps.command(name="solo")
+    @commands.guild_only()
+    async def rps_solo(self, ctx: commands.Context):
+        """Start a solo game against the fake CPU opponent."""
+        await self._start_game(ctx, None)
+
+    async def _start_game(
+        self, ctx: commands.Context, opponent: Optional[discord.Member]
+    ) -> None:
         if ctx.channel.id in self.games:
             await ctx.send(
-                "A game is already active in this channel. "
-                f"Use `{ctx.clean_prefix}rps cancel` or wait."
+                "A game is already active in this channel.",
+                ephemeral=True,
             )
             return
         if ctx.author.id in self.player_channel:
-            await ctx.send("You already have an active game elsewhere.")
+            await ctx.send(
+                "You already have an active game elsewhere.", ephemeral=True
+            )
+            return
+        if opponent is not None and opponent.id in self.player_channel:
+            await ctx.send(
+                f"{opponent.display_name} is already in a game.",
+                ephemeral=True,
+            )
             return
 
-        target = opponent.strip()
-        vs_bot = target.lower() in BOT_KEYWORDS
-        opp_id = BOT_ID
-        opp_name = BOT_NAME
-
-        if not vs_bot:
-            try:
-                member = await commands.MemberConverter().convert(ctx, target)
-            except commands.BadArgument:
-                await ctx.send(
-                    "Invalid opponent. Mention a user or type `bot` for CPU."
-                )
-                return
-            if member.bot:
-                await ctx.send(
-                    "Can't challenge real bots. Use `bot` keyword for the fake CPU opponent."
-                )
-                return
-            if member.id == ctx.author.id:
-                await ctx.send(
-                    "Can't challenge yourself. Use `bot` for solo play."
-                )
-                return
-            if member.id in self.player_channel:
-                await ctx.send(f"{member.display_name} is already in a game.")
-                return
-            opp_id = member.id
-            opp_name = member.display_name
+        vs_bot = opponent is None
+        opp_id = BOT_ID if vs_bot else opponent.id
+        opp_name = BOT_NAME if vs_bot else opponent.display_name
 
         game = Game(
             channel_id=ctx.channel.id,
@@ -171,33 +175,32 @@ class RPS(commands.Cog):
             game.picks[BOT_ID] = random.choice(CHOICES)
             await ctx.send(
                 f"**RPS:** {ctx.author.mention} vs **{BOT_NAME}**\n"
-                f"The CPU locked its pick. DM me "
-                f"`{ctx.clean_prefix}rps pick <rock|paper|scissors>` to play."
+                f"CPU locked its pick. Run `/rps pick` to play."
             )
         else:
             await ctx.send(
-                f"**RPS Challenge:** {ctx.author.mention} challenges <@{opp_id}>.\n"
-                f"<@{opp_id}> respond with `{ctx.clean_prefix}rps accept` "
-                f"or `{ctx.clean_prefix}rps decline` within 5 minutes."
+                f"**RPS Challenge:** {ctx.author.mention} challenges {opponent.mention}.\n"
+                f"{opponent.mention} respond with `/rps accept` or `/rps decline` within 5 minutes."
             )
         self._start_timer(game)
 
     @rps.command(name="accept")
     @commands.guild_only()
     async def rps_accept(self, ctx: commands.Context):
-        """Accept a pending challenge targeting you in this channel."""
+        """Accept a challenge targeting you in this channel."""
         game = self.games.get(ctx.channel.id)
         if (
             not game
             or game.state != "pending"
             or game.opponent_id != ctx.author.id
         ):
-            await ctx.send("No challenge for you to accept here.")
+            await ctx.send(
+                "No challenge for you to accept here.", ephemeral=True
+            )
             return
         game.state = "picking"
         await ctx.send(
-            f"Challenge accepted. Both players DM me "
-            f"`{ctx.clean_prefix}rps pick <rock|paper|scissors>`."
+            "Challenge accepted. Both players run `/rps pick` to submit privately."
         )
 
     @rps.command(name="decline")
@@ -210,63 +213,59 @@ class RPS(commands.Cog):
             or game.state != "pending"
             or game.opponent_id != ctx.author.id
         ):
-            await ctx.send("No challenge for you to decline here.")
+            await ctx.send(
+                "No challenge for you to decline here.", ephemeral=True
+            )
             return
         self._remove_game(game)
         await ctx.send(f"{ctx.author.display_name} declined the challenge.")
 
     @rps.command(name="cancel")
     async def rps_cancel(self, ctx: commands.Context):
-        """Challenger cancels the current channel game."""
+        """Challenger cancels their current game."""
         game = self._get_game_for_user(ctx.author.id)
         if not game or game.challenger_id != ctx.author.id:
-            await ctx.send("You have no game to cancel.")
+            await ctx.send("You have no game to cancel.", ephemeral=True)
             return
-        channel = self.bot.get_channel(game.channel_id)
         self._remove_game(game)
-        msg = "Game canceled."
-        if channel and (not ctx.guild or channel.id != ctx.channel.id):
-            try:
-                await channel.send(msg)
-            except discord.HTTPException:
-                pass
-        await ctx.send(msg)
+        await ctx.send("Game canceled.")
 
-    @rps.command(name="pick", aliases=["play"])
-    async def rps_pick(self, ctx: commands.Context, choice: str):
-        """DM only: submit your pick."""
-        if ctx.guild is not None:
+    @rps.command(name="pick")
+    @app_commands.describe(choice="Your pick.")
+    async def rps_pick(self, ctx: commands.Context, choice: PickChoice):
+        """Submit your pick. Response is private."""
+        game = self._get_game_for_user(ctx.author.id)
+        if not game:
+            await ctx.send("You have no active RPS game.", ephemeral=True)
+            return
+        if game.state != "picking":
+            await ctx.send(
+                "Game is not in picking state yet.", ephemeral=True
+            )
+            return
+        if ctx.author.id in game.picks:
+            await ctx.send(
+                "You already picked. Wait for opponent.", ephemeral=True
+            )
+            return
+
+        # Prefix in guild: delete the user's message so opponent can't see it.
+        if ctx.interaction is None and ctx.guild is not None:
             try:
                 await ctx.message.delete()
             except (discord.Forbidden, discord.NotFound, discord.HTTPException):
                 pass
-            try:
-                await ctx.author.send(
-                    "Pick via DM so your opponent can't see. "
-                    f"Send `{ctx.clean_prefix}rps pick <r|p|s>` to me here."
-                )
-            except discord.Forbidden:
-                await ctx.send(
-                    f"{ctx.author.mention} enable DMs from server members and try again."
-                )
-            return
 
-        game = self._get_game_for_user(ctx.author.id)
-        if not game:
-            await ctx.send("You have no active RPS game.")
-            return
-        if game.state != "picking":
-            await ctx.send("Game is not in picking state yet.")
-            return
-        pick = ALIASES.get(choice.lower())
-        if pick is None:
-            await ctx.send("Invalid. Use rock, paper, scissors (or r/p/s).")
-            return
-        if ctx.author.id in game.picks:
-            await ctx.send("You already picked. Wait for opponent.")
-            return
-        game.picks[ctx.author.id] = pick
-        await ctx.send(f"Locked in: **{pick}** {EMOJI[pick]}")
+        game.picks[ctx.author.id] = choice
+
+        reply = f"Locked in: **{choice}** {EMOJI[choice]}"
+        if ctx.interaction is not None:
+            await ctx.send(reply, ephemeral=True)
+        else:
+            try:
+                await ctx.author.send(reply)
+            except discord.Forbidden:
+                pass
 
         if game.both_picked():
             await self._reveal(game)
@@ -312,10 +311,14 @@ class RPS(commands.Cog):
 
     @rps.command(name="status")
     async def rps_status(self, ctx: commands.Context):
-        """Show current game state in this channel (or your DM game)."""
-        game = self.games.get(ctx.channel.id) if ctx.guild else self._get_game_for_user(ctx.author.id)
+        """Show current game state in this channel, or your game if running."""
+        game = None
+        if ctx.guild is not None:
+            game = self.games.get(ctx.channel.id)
+        if game is None:
+            game = self._get_game_for_user(ctx.author.id)
         if not game:
-            await ctx.send("No active game.")
+            await ctx.send("No active game.", ephemeral=True)
             return
         picked = []
         if game.challenger_id in game.picks:
@@ -326,19 +329,25 @@ class RPS(commands.Cog):
         await ctx.send(
             f"State: **{game.state}** | {game.challenger_name} vs {game.opponent_name}\n"
             f"Picked: {', '.join(picked) if picked else 'nobody'} | "
-            f"elapsed {elapsed}s / {GAME_TIMEOUT}s"
+            f"elapsed {elapsed}s / {GAME_TIMEOUT}s",
+            ephemeral=True,
         )
 
-    @commands.command(name="rpsstats")
+    @commands.hybrid_command(name="rpsstats")
+    @app_commands.describe(user="User to look up (defaults to yourself).")
     async def rps_stats(
-        self, ctx: commands.Context, user: Optional[discord.Member] = None
+        self,
+        ctx: commands.Context,
+        user: Optional[discord.Member] = None,
     ):
-        """Show RPS stats for yourself or another user."""
+        """Show RPS stats."""
         target = user or ctx.author
         data = await self.config.user(target).all()
         total = data["wins"] + data["losses"] + data["ties"]
         if total == 0:
-            await ctx.send(f"{target.display_name} has not played yet.")
+            await ctx.send(
+                f"{target.display_name} has not played yet.", ephemeral=True
+            )
             return
         pct = data["wins"] / total * 100
         await ctx.send(
@@ -347,11 +356,11 @@ class RPS(commands.Cog):
             f"({pct:.1f}% win rate over {total} games)"
         )
 
-    @commands.command(name="rpsreset")
+    @commands.hybrid_command(name="rpsreset")
     async def rps_reset(self, ctx: commands.Context):
         """Wipe your RPS stats."""
         await self.config.user(ctx.author).clear()
-        await ctx.send("Your RPS stats were cleared.")
+        await ctx.send("Your RPS stats were cleared.", ephemeral=True)
 
     async def red_delete_data_for_user(
         self, *, requester: str, user_id: int

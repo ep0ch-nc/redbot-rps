@@ -1,11 +1,13 @@
 {
     "author": ["ep0ch-nc"],
     "name": "RPS",
-    "short": "Challenge-based Rock Paper Scissors game.",
-    "description": "Challenge another user or a fake CPU opponent to RPS. Picks submitted via DM. Tracks per-user stats.",
-    "install_msg": "Loaded. Start with `[p]rps challenge @user` or `[p]rps challenge bot` for solo.",
-    "tags": ["game", "fun", "rps", "challenge"],
-    "end_user_data_statement": "Stores per-user RPS win/loss/tie counts keyed by Discord user ID. Cleared via `[p]rpsreset` or Red's data deletion requests.",
+    "short": "Slash-command Rock Paper Scissors with challenges and fake CPU.",
+    "description": "Challenge a user or fake CPU opponent to RPS. Slash commands via hybrid, ephemeral pick replies. Tracks per-user stats.",
+    "install_msg": "Loaded. Run `[p]slash enable rps && [p]slash enable rpsstats && [p]slash enable rpsreset && [p]slash sync` to register slash commands, then `/rps solo` for a test game.",
+    "tags": ["game", "fun", "rps", "challenge", "slash"],
+    "end_user_data_statement": "Stores per-user RPS win/loss/tie counts keyed by Discord user ID. Cleared via /rpsreset or Red's data deletion requests.",
     "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
     "requirements": []
 }
